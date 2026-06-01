@@ -1,5 +1,6 @@
 import React, { useEffect, useRef, useState, useCallback, useContext } from 'react';
 import { createPortal } from 'react-dom';
+import { request } from 'librechat-data-provider';
 import { ThemeContext, isDark } from '@librechat/client';
 import { createMCPAppBridge, type MCPAppBridgeLike } from './createMCPAppBridge';
 import type { McpUiResourceCsp, McpUiResourcePermissions } from './mcpAppUtils';
@@ -190,15 +191,10 @@ export default function MCPAppContainer({
     let active = true;
     void (async () => {
       try {
-        const response = await fetch(SANDBOX_ENDPOINT, {
-          method: 'GET',
-          credentials: 'same-origin',
-          cache: 'no-store',
+        const htmlTemplate = await request.get<string>(SANDBOX_ENDPOINT, {
+          responseType: 'text',
+          headers: { 'Cache-Control': 'no-store' },
         });
-        if (!response.ok) {
-          throw new Error(`Failed to load MCP sandbox template (${response.status})`);
-        }
-        const htmlTemplate = await response.text();
         if (!active) {
           return;
         }
