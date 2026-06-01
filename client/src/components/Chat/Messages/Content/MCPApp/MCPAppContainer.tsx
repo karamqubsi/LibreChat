@@ -1,11 +1,9 @@
 import React, { useEffect, useRef, useState, useCallback, useContext } from 'react';
-import { createPortal } from 'react-dom';
 import { request } from 'librechat-data-provider';
 import { ThemeContext, isDark } from '@librechat/client';
 import { createMCPAppBridge, type MCPAppBridgeLike } from './createMCPAppBridge';
 import type { McpUiResourceCsp, McpUiResourcePermissions } from './mcpAppUtils';
 import { normalizePermissions } from './mcpAppUtils';
-import { mainTextareaId } from '~/common';
 import { useLocalize } from '~/hooks';
 import { MessagesViewContext } from '~/Providers/MessagesViewContext';
 
@@ -130,10 +128,6 @@ export default function MCPAppContainer({
   const messagesViewContext = useContext(MessagesViewContext);
   const ask = messagesViewContext?.ask;
   const setMcpAppModelContext = messagesViewContext?.setMcpAppModelContext;
-  const [inlineAnchorNode, setInlineAnchorNode] = useState<HTMLDivElement | null>(null);
-  const inlineAnchorRef = useCallback((node: HTMLDivElement | null) => {
-    setInlineAnchorNode((prev) => (prev === node ? prev : node));
-  }, []);
   const [iframeNode, setIframeNode] = useState<HTMLIFrameElement | null>(null);
   const iframeRef = useCallback((node: HTMLIFrameElement | null) => {
     if (!node) {
@@ -143,12 +137,6 @@ export default function MCPAppContainer({
   }, []);
   const bridgeRef = useRef<MCPAppBridgeLike | null>(null);
   const [inlineIframeHeight, setInlineIframeHeight] = useState(0);
-  const [inlineWidth, setInlineWidth] = useState(0);
-  const [inlineViewportTop, setInlineViewportTop] = useState(0);
-  const [inlineViewportLeft, setInlineViewportLeft] = useState(0);
-  const [scrollViewportTop, setScrollViewportTop] = useState(0);
-  const [scrollViewportBottom, setScrollViewportBottom] = useState(0);
-  const [composerViewportTop, setComposerViewportTop] = useState<number | null>(null);
   const [revealed, setRevealed] = useState(false);
   const [displayMode, setDisplayMode] = useState<'inline' | 'fullscreen'>('inline');
   const [sandboxSrc, setSandboxSrc] = useState<string>('about:blank');
@@ -329,7 +317,7 @@ export default function MCPAppContainer({
     if (bridgeRef.current) {
       bridgeRef.current.sendContextUpdate(theme, displayMode);
     }
-  }, [theme, displayMode, inlineIframeHeight, inlineWidth]);
+  }, [theme, displayMode, inlineIframeHeight]);
 
   const allowFullscreen = isFullscreenAllowed(resourceMeta?.ui?.allowFullscreen);
 
@@ -361,120 +349,6 @@ export default function MCPAppContainer({
     };
   }, [displayMode]);
 
-  useEffect(() => {
-    if (!inlineAnchorNode || typeof window === 'undefined') {
-      return;
-    }
-
-    const resolveScrollViewport = (): HTMLElement | null => {
-      const byClass = inlineAnchorNode.closest('.scrollbar-gutter-stable') as HTMLElement | null;
-      if (byClass) {
-        return byClass;
-      }
-
-      // Fallback for unexpected layout variants.
-      let current: HTMLElement | null = inlineAnchorNode.parentElement;
-      while (current) {
-        const style = window.getComputedStyle(current);
-        const overflowY = style.overflowY;
-        if (overflowY === 'auto' || overflowY === 'scroll') {
-          return current;
-        }
-        current = current.parentElement;
-      }
-
-      return (document.querySelector('.scrollbar-gutter-stable') as HTMLElement | null) ?? null;
-    };
-
-    const updateInlineRect = () => {
-      const rect = inlineAnchorNode.getBoundingClientRect();
-      setInlineViewportTop(rect.top);
-      setInlineViewportLeft(rect.left);
-      setInlineWidth(rect.width);
-
-      const scrollViewport = resolveScrollViewport();
-      if (scrollViewport) {
-        const scrollRect = scrollViewport.getBoundingClientRect();
-        setScrollViewportTop(scrollRect.top);
-        setScrollViewportBottom(scrollRect.bottom);
-      } else {
-        setScrollViewportTop(0);
-        setScrollViewportBottom(window.innerHeight);
-      }
-    };
-
-    updateInlineRect();
-    const resizeObserver = new ResizeObserver(() => updateInlineRect());
-    resizeObserver.observe(inlineAnchorNode);
-    const scrollViewport = resolveScrollViewport();
-    if (scrollViewport) {
-      resizeObserver.observe(scrollViewport);
-    }
-
-    window.addEventListener('resize', updateInlineRect);
-    // Capture scroll from nested containers.
-    window.addEventListener('scroll', updateInlineRect, true);
-
-    return () => {
-      resizeObserver.disconnect();
-      window.removeEventListener('resize', updateInlineRect);
-      window.removeEventListener('scroll', updateInlineRect, true);
-    };
-  }, [inlineAnchorNode]);
-
-  useEffect(() => {
-    if (displayMode !== 'inline' || !inlineAnchorNode) {
-      return;
-    }
-    const rect = inlineAnchorNode.getBoundingClientRect();
-    setInlineViewportTop(rect.top);
-    setInlineViewportLeft(rect.left);
-    setInlineWidth(rect.width);
-    const scrollContainer = inlineAnchorNode.closest(
-      '.scrollbar-gutter-stable',
-    ) as HTMLElement | null;
-    if (scrollContainer) {
-      const scrollRect = scrollContainer.getBoundingClientRect();
-      setScrollViewportTop(scrollRect.top);
-      setScrollViewportBottom(scrollRect.bottom);
-    } else {
-      setScrollViewportTop(0);
-      setScrollViewportBottom(window.innerHeight);
-    }
-  }, [displayMode, inlineAnchorNode, inlineIframeHeight]);
-
-  useEffect(() => {
-    if (typeof window === 'undefined') {
-      return;
-    }
-
-    const updateComposerViewportTop = () => {
-      const textarea = document.getElementById(mainTextareaId) as HTMLElement | null;
-      if (!textarea) {
-        setComposerViewportTop(null);
-        return;
-      }
-      const rect = textarea.getBoundingClientRect();
-      setComposerViewportTop(rect.top);
-    };
-
-    updateComposerViewportTop();
-    window.addEventListener('resize', updateComposerViewportTop);
-    window.addEventListener('scroll', updateComposerViewportTop, true);
-
-    const textarea = document.getElementById(mainTextareaId) as HTMLElement | null;
-    const resizeObserver = textarea ? new ResizeObserver(() => updateComposerViewportTop()) : null;
-    if (textarea && resizeObserver) {
-      resizeObserver.observe(textarea);
-    }
-
-    return () => {
-      window.removeEventListener('resize', updateComposerViewportTop);
-      window.removeEventListener('scroll', updateComposerViewportTop, true);
-      resizeObserver?.disconnect();
-    };
-  }, []);
-
   const showBorder = resourceMeta?.ui?.prefersBorder === true;
 
   if (sandboxBootstrapError) {
@@ -492,48 +366,22 @@ export default function MCPAppContainer({
   }
 
   const fullscreen = displayMode === 'fullscreen';
-  const inlineWrapperBottom = inlineViewportTop + inlineIframeHeight;
-  // Match native message behavior: content can scroll behind the header area.
-  const topVisibleBound = scrollViewportTop;
-  const bottomVisibleBound =
-    composerViewportTop != null
-      ? Math.min(scrollViewportBottom, composerViewportTop)
-      : scrollViewportBottom;
-  const inlineClipTop = !fullscreen ? Math.max(0, topVisibleBound - inlineViewportTop) : 0;
-  const inlineClipBottom = !fullscreen ? Math.max(0, inlineWrapperBottom - bottomVisibleBound) : 0;
-  const portalWrapperStyle: React.CSSProperties = fullscreen
+
+  // Inline: the iframe renders in normal document flow inside a height-reserving
+  // placeholder, so surrounding message content lays out around it naturally.
+  // Fullscreen: the same iframe node's wrapper is promoted to a fixed overlay via
+  // CSS only (no portal, no remount), preserving the live bridge and app state.
+  // NOTE: fullscreen relies on no ancestor in the chat tree establishing a
+  // fixed-positioning containing block (transform/filter/perspective/contain) —
+  // true today. Portaling to <body> would harden it but remounts the iframe and
+  // drops app state, so we keep the same-node approach.
+  const wrapperStyle: React.CSSProperties = fullscreen
     ? {
         position: 'fixed',
         inset: 0,
         width: '100vw',
         height: '100vh',
         zIndex: 2147483647,
-      }
-    : {
-        position: 'fixed',
-        top: inlineViewportTop,
-        left: inlineViewportLeft,
-        width: inlineWidth,
-        height: inlineIframeHeight,
-        zIndex: 0,
-        overflow: 'hidden',
-        opacity: revealed ? 1 : 0,
-        transition: 'opacity 0.3s ease-out',
-        pointerEvents: revealed ? 'auto' : 'none',
-        clipPath:
-          inlineClipTop > 0 || inlineClipBottom > 0
-            ? `inset(${inlineClipTop}px 0 ${inlineClipBottom}px 0)`
-            : undefined,
-        WebkitClipPath:
-          inlineClipTop > 0 || inlineClipBottom > 0
-            ? `inset(${inlineClipTop}px 0 ${inlineClipBottom}px 0)`
-            : undefined,
-      };
-
-  const portalBodyStyle: React.CSSProperties = fullscreen
-    ? {
-        width: '100%',
-        height: '100%',
         background: 'var(--surface-primary)',
         display: 'flex',
         flexDirection: 'column',
@@ -543,86 +391,63 @@ export default function MCPAppContainer({
         height: '100%',
       };
 
-  const iframeContainerStyle: React.CSSProperties = fullscreen
-    ? { width: '100%', height: '100%', flex: 1, overflow: 'hidden' }
-    : { width: '100%', height: '100%', overflow: 'hidden' };
-
-  const portalTarget =
-    typeof document !== 'undefined' && inlineAnchorNode
-      ? ((inlineAnchorNode.closest('[data-chat-view-root]') as HTMLElement | null) ?? document.body)
-      : null;
-
-  const iframePortal =
-    portalTarget != null
-      ? createPortal(
-          <div style={portalWrapperStyle}>
-            <div style={portalBodyStyle}>
-              <div
-                className="items-center justify-between border-b border-border-medium px-4 py-2"
-                style={{ display: fullscreen ? 'flex' : 'none' }}
-              >
-                {fullscreen && (
-                  <>
-                    <span className="text-sm font-medium text-text-primary">
-                      {localize('com_ui_mcp_server')}
-                    </span>
-                    <button
-                      onClick={() => setDisplayMode('inline')}
-                      className="rounded-md p-1 text-text-secondary hover:bg-surface-hover hover:text-text-primary"
-                      aria-label="Close fullscreen"
-                    >
-                      <svg
-                        width="20"
-                        height="20"
-                        viewBox="0 0 20 20"
-                        fill="none"
-                        stroke="currentColor"
-                        strokeWidth="2"
-                      >
-                        <path d="M15 5L5 15M5 5l10 10" />
-                      </svg>
-                    </button>
-                  </>
-                )}
-              </div>
-              <div style={iframeContainerStyle}>
-                <iframe
-                  ref={iframeRef}
-                  sandbox="allow-scripts allow-same-origin"
-                  src={sandboxSrc}
-                  style={{
-                    width: '100%',
-                    height: '100%',
-                    marginRight: 0,
-                    border: 'none',
-                    display: 'block',
-                    borderRadius: 0,
-                  }}
-                  title="MCP App"
-                />
-              </div>
-            </div>
-          </div>,
-          portalTarget,
-        )
-      : null;
+  const iframeStyle: React.CSSProperties = fullscreen
+    ? { width: '100%', flex: 1, minHeight: 0, border: 'none', display: 'block' }
+    : { width: '100%', height: '100%', border: 'none', display: 'block' };
 
   return (
-    <>
-      {iframePortal}
-      <div
-        className={`mcp-app-container my-2 ${showBorder ? 'rounded-lg border border-border-medium' : ''}`}
-        style={{
-          maxWidth: '100%',
-          overflow: 'hidden',
-          opacity: fullscreen ? 0 : revealed ? 1 : 0,
-          height: inlineIframeHeight,
-          transition: 'opacity 0.3s ease-out, height 0.35s cubic-bezier(0.16, 1, 0.3, 1)',
-          pointerEvents: fullscreen ? 'none' : 'auto',
-        }}
-      >
-        <div ref={inlineAnchorRef} style={{ width: '100%', height: '100%' }} />
+    <div
+      className={`mcp-app-container my-2 ${
+        showBorder && !fullscreen ? 'rounded-lg border border-border-medium' : ''
+      }`}
+      style={{
+        maxWidth: '100%',
+        overflow: 'hidden',
+        // Keep opaque in fullscreen: the fixed overlay is a descendant here, and
+        // CSS opacity on this placeholder would dim it. Inline still fades in once
+        // the app reports a size (revealed).
+        opacity: fullscreen || revealed ? 1 : 0,
+        height: inlineIframeHeight,
+        transition: 'opacity 0.3s ease-out, height 0.35s cubic-bezier(0.16, 1, 0.3, 1)',
+      }}
+    >
+      <div style={wrapperStyle}>
+        <div
+          className="items-center justify-between border-b border-border-medium px-4 py-2"
+          style={{ display: fullscreen ? 'flex' : 'none' }}
+        >
+          {fullscreen && (
+            <>
+              <span className="text-sm font-medium text-text-primary">
+                {localize('com_ui_mcp_server')}
+              </span>
+              <button
+                onClick={() => setDisplayMode('inline')}
+                className="rounded-md p-1 text-text-secondary hover:bg-surface-hover hover:text-text-primary"
+                aria-label="Close fullscreen"
+              >
+                <svg
+                  width="20"
+                  height="20"
+                  viewBox="0 0 20 20"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2"
+                >
+                  <path d="M15 5L5 15M5 5l10 10" />
+                </svg>
+              </button>
+            </>
+          )}
+        </div>
+        <iframe
+          ref={iframeRef}
+          sandbox="allow-scripts allow-same-origin"
+          src={sandboxSrc}
+          style={iframeStyle}
+          title="MCP App"
+        />
       </div>
-    </>
+    </div>
   );
 }

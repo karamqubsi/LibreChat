@@ -1,7 +1,18 @@
 import React from 'react';
+import { RecoilRoot } from 'recoil';
+import { request } from 'librechat-data-provider';
 import { render, screen, waitFor, act, fireEvent } from '@testing-library/react';
 import MCPAppContainer from '../MCPAppContainer';
 import { MessagesViewContext } from '~/Providers/MessagesViewContext';
+
+jest.mock('librechat-data-provider', () => {
+  const actual = jest.requireActual('librechat-data-provider');
+  return {
+    __esModule: true,
+    ...actual,
+    request: { ...actual.request, get: jest.fn() },
+  };
+});
 
 const bridgeInstances: Array<{
   options: any;
@@ -13,6 +24,7 @@ const bridgeInstances: Array<{
 }> = [];
 
 jest.mock('@librechat/client', () => {
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
   const React = require('react');
   return {
     ThemeContext: React.createContext({ theme: 'light' }),
@@ -57,15 +69,19 @@ describe('MCPAppContainer fullscreen lifecycle', () => {
   } as const;
 
   const renderWithContext = (node: React.ReactNode) =>
-    render(<MessagesViewContext.Provider value={viewContextValue as any}>{node}</MessagesViewContext.Provider>);
+    render(
+      <RecoilRoot>
+        <MessagesViewContext.Provider value={viewContextValue as any}>
+          {node}
+        </MessagesViewContext.Provider>
+      </RecoilRoot>,
+    );
 
   beforeEach(() => {
     bridgeInstances.length = 0;
     jest.clearAllMocks();
-    (global.fetch as unknown as jest.Mock | undefined)?.mockReset?.();
-    global.fetch = jest.fn().mockImplementation(
-      () => new Promise(() => undefined),
-    ) as unknown as typeof fetch;
+    (request.get as jest.Mock).mockReset();
+    (request.get as jest.Mock).mockImplementation(() => new Promise(() => undefined));
   });
 
   it('keeps the same bridge/iframe instance when switching to fullscreen', async () => {
@@ -274,7 +290,7 @@ describe('MCPAppContainer fullscreen lifecycle', () => {
     });
   });
 
-  it('uses flush inline geometry without right-edge overdraw', async () => {
+  it('renders the inline iframe in normal document flow, reserving its height', () => {
     const { container } = renderWithContext(
       <MCPAppContainer
         html="<html><head></head><body>app</body></html>"
@@ -285,65 +301,25 @@ describe('MCPAppContainer fullscreen lifecycle', () => {
       />,
     );
 
-    expect(bridgeInstances).toHaveLength(1);
+    const iframe = screen.getByTitle('MCP App') as HTMLIFrameElement;
+    const placeholder = container.querySelector('.mcp-app-container') as HTMLElement;
 
-    const anchor = container.querySelector('.mcp-app-container > div') as HTMLDivElement;
-    expect(anchor).toBeTruthy();
-    const scrollViewport = anchor.parentElement as HTMLDivElement;
-    scrollViewport.classList.add('scrollbar-gutter-stable');
+    // The iframe lives inside the in-flow placeholder (not a body-level portal),
+    // so surrounding message content lays out around it instead of behind it.
+    expect(placeholder).toBeTruthy();
+    expect(iframe.closest('.mcp-app-container')).toBe(placeholder);
 
-    const anchorRect = {
-      x: 120.75,
-      y: 40,
-      width: 345.25,
-      height: 200,
-      top: 40,
-      right: 466,
-      bottom: 240,
-      left: 120.75,
-      toJSON: () => ({}),
-    } as DOMRect;
-
-    const viewportRect = {
-      x: 0,
-      y: 80,
-      width: 900,
-      height: 620,
-      top: 80,
-      right: 900,
-      bottom: 700,
-      left: 0,
-      toJSON: () => ({}),
-    } as DOMRect;
-
-    Object.defineProperty(anchor, 'getBoundingClientRect', {
-      configurable: true,
-      value: jest.fn(() => anchorRect),
-    });
-    Object.defineProperty(scrollViewport, 'getBoundingClientRect', {
-      configurable: true,
-      value: jest.fn(() => viewportRect),
-    });
-
+    // The placeholder reserves the app's reported height in normal flow.
     act(() => {
-      bridgeInstances[0].options.onSizeChange({ height: 200 });
-      window.dispatchEvent(new Event('resize'));
+      bridgeInstances[0].options.onSizeChange({ height: 240 });
     });
-
-    const iframe = screen.getByTitle('MCP App');
-    const portalWrapper = iframe.parentElement?.parentElement?.parentElement as HTMLElement;
-    await waitFor(() => {
-      expect(portalWrapper.style.left).toBe('120.75px');
-      expect(portalWrapper.style.width).toBe('345.25px');
-      expect(portalWrapper.style.clipPath).toMatch(/^inset\(40px 0(?:px)? 0px 0(?:px)?\)$/);
-    });
+    expect(placeholder.style.height).toBe('240px');
   });
 
   it('loads sandbox from opaque-origin data URL bootstrap', async () => {
-    (global.fetch as unknown as jest.Mock).mockResolvedValueOnce({
-      ok: true,
-      text: async () => '<!DOCTYPE html><html><body>sandbox</body></html>',
-    });
+    (request.get as jest.Mock).mockResolvedValueOnce(
+      '<!DOCTYPE html><html><body>sandbox</body></html>',
+    );
 
     renderWithContext(
       <MCPAppContainer
@@ -357,10 +333,9 @@ describe('MCPAppContainer fullscreen lifecycle', () => {
 
     const iframe = screen.getByTitle('MCP App') as HTMLIFrameElement;
     await waitFor(() => {
-      expect(global.fetch).toHaveBeenCalledWith('/api/mcp/sandbox', {
-        method: 'GET',
-        credentials: 'same-origin',
-        cache: 'no-store',
+      expect(request.get).toHaveBeenCalledWith('/api/mcp/sandbox', {
+        responseType: 'text',
+        headers: { 'Cache-Control': 'no-store' },
       });
       expect(iframe.getAttribute('src')).toContain('data:text/html');
     });
@@ -379,7 +354,10 @@ describe('MCPAppContainer fullscreen lifecycle', () => {
 
     expect(bridgeInstances).toHaveLength(1);
     act(() => {
-      bridgeInstances[0].options.onMessage({ role: 'user', content: [{ type: 'text', text: 'hello' }] });
+      bridgeInstances[0].options.onMessage({
+        role: 'user',
+        content: [{ type: 'text', text: 'hello' }],
+      });
     });
     expect(ask).toHaveBeenCalledWith({ text: 'hello' });
 
