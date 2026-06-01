@@ -22,7 +22,15 @@ function isGroupableToolCall(part: TMessageContentParts): boolean {
   return true;
 }
 
-export function groupSequentialToolCalls(parts: PartWithIndex[]): GroupedPart[] {
+export function groupSequentialToolCalls(
+  parts: PartWithIndex[],
+  /**
+   * Optional predicate to keep a tool call out of collapsed groups (rendered as a
+   * `single`). Used so tool calls that render their own inline UI (e.g. MCP Apps)
+   * stay visible by default instead of being hidden inside a collapsed group.
+   */
+  isUngroupable?: (part: TMessageContentParts) => boolean,
+): GroupedPart[] {
   const result: GroupedPart[] = [];
   let currentGroup: PartWithIndex[] = [];
 
@@ -38,7 +46,7 @@ export function groupSequentialToolCalls(parts: PartWithIndex[]): GroupedPart[] 
   };
 
   for (const item of parts) {
-    if (isGroupableToolCall(item.part)) {
+    if (isGroupableToolCall(item.part) && isUngroupable?.(item.part) !== true) {
       currentGroup.push(item);
     } else {
       flushGroup();

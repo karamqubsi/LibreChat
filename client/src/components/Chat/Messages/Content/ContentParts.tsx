@@ -1,5 +1,5 @@
 import { memo, useMemo, useCallback } from 'react';
-import { ContentTypes } from 'librechat-data-provider';
+import { ContentTypes, Tools } from 'librechat-data-provider';
 import type {
   TMessageContentParts,
   SearchResultData,
@@ -289,7 +289,11 @@ const ContentParts = memo(function ContentParts({
 
   const groupedParts = useMemo(
     () =>
-      groupSequentialToolCalls(sequentialParts).map((group) => {
+      groupSequentialToolCalls(sequentialParts, (part) =>
+        (attachmentMap[getToolCallId(part)] ?? []).some(
+          (attachment) => attachment.type === Tools.mcp_app,
+        ),
+      ).map((group) => {
         if (group.type === 'single') {
           return group;
         }
