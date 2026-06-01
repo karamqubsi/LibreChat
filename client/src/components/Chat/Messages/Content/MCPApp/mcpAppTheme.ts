@@ -65,16 +65,12 @@ export function getHostContext(
         '--color-text-secondary':
           root.getPropertyValue('--text-secondary').trim() ||
           (theme === 'dark' ? '#a0a0a0' : '#666666'),
-        '--color-border':
-          root.getPropertyValue('--border-color').trim() ||
-          (theme === 'dark' ? '#333' : '#e0e0e0'),
-        '--color-accent':
-          root.getPropertyValue('--accent-color').trim() || '#0066cc',
+        '--color-border-primary':
+          root.getPropertyValue('--border-color').trim() || (theme === 'dark' ? '#333' : '#e0e0e0'),
+        '--color-ring-primary': root.getPropertyValue('--accent-color').trim() || '#0066cc',
         '--font-sans':
-          root.getPropertyValue('--font-family').trim() ||
-          'system-ui, -apple-system, sans-serif',
-        '--radius':
-          root.getPropertyValue('--border-radius').trim() || '0.5rem',
+          root.getPropertyValue('--font-family').trim() || 'system-ui, -apple-system, sans-serif',
+        '--border-radius-md': root.getPropertyValue('--border-radius').trim() || '0.5rem',
       },
     },
     displayMode: resolvedDisplayMode,
