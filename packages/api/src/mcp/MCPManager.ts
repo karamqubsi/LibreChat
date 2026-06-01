@@ -24,6 +24,7 @@ import { preProcessGraphTokens } from '~/utils/graph';
 import { formatToolContent } from './parsers';
 import { MCPConnection } from './connection';
 import { processMCPEnv } from '~/utils/env';
+import { isUserSourced, isOAuthServer } from './utils';
 
 /**
  * Centralized manager for MCP server connections and tool execution.
@@ -65,6 +66,8 @@ export class MCPManager extends UserConnectionManager {
       user?: IUser;
       forceNew?: boolean;
       flowManager?: FlowStateManager<MCPOAuthTokens | null>;
+      /** Pre-resolved config for config-source servers not in YAML/DB */
+      serverConfig?: t.ParsedServerConfig;
     } & Omit<t.OAuthConnectionOptions, 'useOAuth' | 'user' | 'flowManager'>,
   ): Promise<MCPConnection> {
     //the get method checks if the config is still valid as app level
@@ -103,6 +106,7 @@ export class MCPManager extends UserConnectionManager {
     const serverConfig = await MCPServersRegistry.getInstance().getServerConfig(
       serverName,
       user?.id,
+      args.configServers,
     );
 
     if (!serverConfig) {
@@ -110,18 +114,20 @@ export class MCPManager extends UserConnectionManager {
       return { tools: null, oauthRequired: false, oauthUrl: null };
     }
 
-    const useOAuth = Boolean(serverConfig.requiresOAuth || serverConfig.oauthMetadata);
+    const useOAuth = isOAuthServer(serverConfig);
 
     const registry = MCPServersRegistry.getInstance();
     const useSSRFProtection = registry.shouldEnableSSRFProtection();
     const allowedDomains = registry.getAllowedDomains();
-    const dbSourced = !!serverConfig.dbId;
+    const allowedAddresses = registry.getAllowedAddresses();
+    const dbSourced = isUserSourced(serverConfig);
     const basic: t.BasicConnectionOptions = {
       dbSourced,
       serverName,
       serverConfig,
       useSSRFProtection,
       allowedDomains,
+      allowedAddresses,
       enableApps: this.enableApps,
     };
 
@@ -206,9 +212,15 @@ export class MCPManager extends UserConnectionManager {
    * @param serverNames Optional array of server names. If not provided or empty, returns all servers.
    * @returns Object mapping server names to their instructions
    */
-  private async getInstructions(serverNames?: string[]): Promise<Record<string, string>> {
+  private async getInstructions(
+    serverNames?: string[],
+    configServers?: Record<string, t.ParsedServerConfig>,
+  ): Promise<Record<string, string>> {
     const instructions: Record<string, string> = {};
-    const configs = await MCPServersRegistry.getInstance().getAllServerConfigs();
+    const configs = await MCPServersRegistry.getInstance().getAllServerConfigs(
+      undefined,
+      configServers,
+    );
     for (const [serverName, config] of Object.entries(configs)) {
       if (config.serverInstructions != null) {
         instructions[serverName] = config.serverInstructions as string;
@@ -223,9 +235,11 @@ export class MCPManager extends UserConnectionManager {
    * @param serverNames Optional array of server names to include. If not provided, includes all servers.
    * @returns Formatted instructions string ready for context injection
    */
-  public async formatInstructionsForContext(serverNames?: string[]): Promise<string> {
-    /** Instructions for specified servers or all stored instructions */
-    const instructionsToInclude = await this.getInstructions(serverNames);
+  public async formatInstructionsForContext(
+    serverNames?: string[],
+    configServers?: Record<string, t.ParsedServerConfig>,
+  ): Promise<string> {
+    const instructionsToInclude = await this.getInstructions(serverNames, configServers);
 
     if (Object.keys(instructionsToInclude).length === 0) {
       return '';
@@ -416,6 +430,7 @@ Please follow these instructions when using tools from the respective MCP server
   async callTool({
     user,
     serverName,
+    serverConfig: providedConfig,
     toolName,
     provider,
     toolArguments,
@@ -430,6 +445,8 @@ Please follow these instructions when using tools from the respective MCP server
   }: {
     user?: IUser;
     serverName: string;
+    /** Pre-resolved config from tool creation context — avoids readThrough TTL and cross-tenant issues */
+    serverConfig?: t.ParsedServerConfig;
     toolName: string;
     provider: t.Provider;
     toolArguments?: Record<string, unknown>;
@@ -460,6 +477,7 @@ Please follow these instructions when using tools from the respective MCP server
         signal: options?.signal,
         customUserVars,
         requestBody,
+        serverConfig: providedConfig,
       });
 
       if (!(await connection.isConnected())) {
@@ -470,11 +488,16 @@ Please follow these instructions when using tools from the respective MCP server
         );
       }
 
-      const rawConfig = (await MCPServersRegistry.getInstance().getServerConfig(
-        serverName,
-        userId,
-      )) as t.ParsedServerConfig;
-      const isDbSourced = !!rawConfig?.dbId;
+      const rawConfig =
+        providedConfig ??
+        (await MCPServersRegistry.getInstance().getServerConfig(serverName, userId));
+      if (!rawConfig) {
+        throw new McpError(
+          ErrorCode.InvalidRequest,
+          `${logPrefix} Configuration for server "${serverName}" not found.`,
+        );
+      }
+      const isDbSourced = isUserSourced(rawConfig);
 
       /** Pre-process Graph token placeholders (async) before the synchronous processMCPEnv pass */
       const graphProcessedConfig = isDbSourced

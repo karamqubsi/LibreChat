@@ -33,7 +33,6 @@ export function ShareMessagesProvider({ messages, children }: ShareMessagesProvi
       abortScroll: false,
       setAbortScroll: () => {},
       index: 0,
-      setLatestMessage: () => {},
       getMessages: () => messages,
       setMessages: () => {},
     }),

@@ -4,6 +4,7 @@ import type * as t from './types';
 import { MCPServersRegistry } from '~/mcp/registry/MCPServersRegistry';
 import { ConnectionsRepository } from '~/mcp/ConnectionsRepository';
 import { MCPConnectionFactory } from '~/mcp/MCPConnectionFactory';
+import { isUserSourced, isOAuthServer } from './utils';
 import { MCPConnection } from './connection';
 import { mcpConfig } from './mcpConfig';
 
@@ -35,12 +36,7 @@ export abstract class UserConnectionManager {
   }
 
   /** Gets or creates a connection for a specific user, coalescing concurrent attempts */
-  public async getUserConnection(
-    opts: {
-      serverName: string;
-      forceNew?: boolean;
-    } & Omit<t.OAuthConnectionOptions, 'useOAuth'>,
-  ): Promise<MCPConnection> {
+  public async getUserConnection(opts: t.UserMCPConnectionOptions): Promise<MCPConnection> {
     const { serverName, forceNew, user } = opts;
     const userId = user?.id;
     if (!userId) {
@@ -86,10 +82,8 @@ export abstract class UserConnectionManager {
       signal,
       returnOnOAuth = false,
       connectionTimeout,
-    }: {
-      serverName: string;
-      forceNew?: boolean;
-    } & Omit<t.OAuthConnectionOptions, 'useOAuth'>,
+      serverConfig: providedConfig,
+    }: t.UserMCPConnectionOptions,
     userId: string,
   ): Promise<MCPConnection> {
     if (await this.appConnections!.has(serverName)) {
@@ -99,7 +93,9 @@ export abstract class UserConnectionManager {
       );
     }
 
-    const config = await MCPServersRegistry.getInstance().getServerConfig(serverName, userId);
+    const config =
+      providedConfig ??
+      (await MCPServersRegistry.getInstance().getServerConfig(serverName, userId));
 
     const userServerMap = this.userConnections.get(userId);
     let connection = forceNew ? undefined : userServerMap?.get(serverName);
@@ -155,16 +151,27 @@ export abstract class UserConnectionManager {
 
     try {
       const registry = MCPServersRegistry.getInstance();
-      connection = await MCPConnectionFactory.create(
-        {
-          serverName: serverName,
-          serverConfig: config,
-          dbSourced: !!config.dbId,
-          useSSRFProtection: registry.shouldEnableSSRFProtection(),
-          allowedDomains: registry.getAllowedDomains(),
-          enableApps: this.enableApps,
-        },
-        {
+      const basic: t.BasicConnectionOptions = {
+        serverConfig: config,
+        serverName: serverName,
+        dbSourced: isUserSourced(config),
+        useSSRFProtection: registry.shouldEnableSSRFProtection(),
+        allowedDomains: registry.getAllowedDomains(),
+        allowedAddresses: registry.getAllowedAddresses(),
+        enableApps: this.enableApps,
+      };
+
+      const useOAuth = isOAuthServer(config);
+      let connectionOptions: t.OAuthConnectionOptions | t.UserConnectionContext;
+      if (useOAuth) {
+        if (!flowManager) {
+          throw new McpError(
+            ErrorCode.InvalidRequest,
+            `[MCP][User: ${userId}] OAuth server "${serverName}" requires a flowManager`,
+          );
+        }
+
+        connectionOptions = {
           useOAuth: true,
           user: user,
           customUserVars: customUserVars,
@@ -176,8 +183,17 @@ export abstract class UserConnectionManager {
           returnOnOAuth: returnOnOAuth,
           requestBody: requestBody,
           connectionTimeout: connectionTimeout,
-        },
-      );
+        };
+      } else {
+        connectionOptions = {
+          user,
+          customUserVars,
+          requestBody,
+          connectionTimeout,
+        };
+      }
+
+      connection = await MCPConnectionFactory.create(basic, connectionOptions);
 
       if (!(await connection?.isConnected())) {
         throw new Error('Failed to establish connection after initialization attempt.');
@@ -263,10 +279,16 @@ export abstract class UserConnectionManager {
           this.pendingConnections.delete(key);
         }
       }
-      // Ensure user activity timestamp is removed
-      this.userLastActivity.delete(userId);
       logger.info(`[MCP][User: ${userId}] All connections processed for disconnection.`);
     }
+    /**
+     * Always clear the activity timestamp, even when userMap was missing.
+     * `updateUserLastActivity` can be called before a connection is established
+     * (e.g. in MCPManager.callTool prior to getConnection); if that connection
+     * attempt fails, the activity entry would otherwise leak and trigger the
+     * idle check repeatedly for the same userId.
+     */
+    this.userLastActivity.delete(userId);
   }
 
   /** Check for and disconnect idle connections */

@@ -25,6 +25,9 @@ export enum Tools {
   memory = 'memory',
   ui_resources = 'ui_resources',
   mcp_app = 'mcp_app',
+  skill = 'skill',
+  read_file = 'read_file',
+  bash_tool = 'bash_tool',
 }
 
 export enum EToolResources {
@@ -239,6 +242,19 @@ export type ToolOptions = {
  */
 export type AgentToolOptions = Record<string, ToolOptions>;
 
+/**
+ * Configuration for spawning subagents (isolated-context child agents) from an agent.
+ * When `enabled` is true, the agent gets a subagent-spawn tool that can delegate work
+ * to either itself (when `allowSelf` is true) and/or the listed `agent_ids`.
+ */
+export type AgentSubagentsConfig = {
+  enabled?: boolean;
+  /** When true (default), the agent may spawn itself in an isolated context. */
+  allowSelf?: boolean;
+  /** Specific agents that may be spawned as subagents. */
+  agent_ids?: string[];
+};
+
 export type Agent = {
   _id?: string;
   id: string;
@@ -273,6 +289,13 @@ export type Agent = {
   support_contact?: SupportContact;
   /** Per-tool configuration options (deferred loading, allowed callers, etc.) */
   tool_options?: AgentToolOptions;
+  /** Optional allowlist of skill ObjectIds. Only applies when `skills_enabled`. */
+  skills?: string[];
+  /** Master toggle for skill use on this agent. `true` = active (full catalog unless
+   *  `skills` narrows it). `false`/undefined = inactive (no skills available). */
+  skills_enabled?: boolean;
+  /** Subagent spawning configuration — isolated-context child agents. */
+  subagents?: AgentSubagentsConfig;
 };
 
 export type TAgentsMap = Record<string, Agent | undefined>;
@@ -298,6 +321,9 @@ export type AgentCreateParams = {
   | 'category'
   | 'support_contact'
   | 'tool_options'
+  | 'skills'
+  | 'skills_enabled'
+  | 'subagents'
 >;
 
 export type AgentUpdateParams = {
@@ -322,6 +348,9 @@ export type AgentUpdateParams = {
   | 'category'
   | 'support_contact'
   | 'tool_options'
+  | 'skills'
+  | 'skills_enabled'
+  | 'subagents'
 >;
 
 export type AgentListParams = {
@@ -584,6 +613,35 @@ export type TContentData = StreamContentData & {
 
 export const actionDelimiter = '_action_';
 export const actionDomainSeparator = '---';
+/** Mirrors `Constants.mcp_delimiter`; duplicated here to avoid a circular import from `config.ts`. */
+const mcpDelimiter = '_mcp_';
+
+/**
+ * Checks whether a tool name is an OpenAPI action tool.
+ *
+ * Action format: `operationId_action_normalizedDomain`
+ * MCP format:    `toolName_mcp_serverName`
+ *
+ * Cross-delimiter collision: an MCP tool like `get_action_mcp_srv` contains
+ * `_action_` as a false positive. Guarded by checking whether `_mcp_` appears
+ * after `_action_`. In the collision case the `_mcp_` suffix always follows
+ * `_action_`; in a valid action tool whose operationId contains `_mcp_`, the
+ * `_mcp_` precedes `_action_`.
+ *
+ * Theoretical limitation: a non-RFC-compliant domain containing literal
+ * underscores that form `_mcp_` (e.g. `api_mcp_internal.com`) would produce
+ * a false negative. RFC 952/1123 prohibit underscores in hostnames, so this
+ * is not expected in practice.
+ */
+export function isActionTool(toolName: string): boolean {
+  const actionIdx = toolName.indexOf(actionDelimiter);
+  if (actionIdx < 0) {
+    return false;
+  }
+  const mcpIdx = toolName.indexOf(mcpDelimiter);
+  return mcpIdx < 0 || mcpIdx < actionIdx;
+}
+
 export const hostImageIdSuffix = '_host_copy';
 export const hostImageNamePrefix = 'host_copy_';
 

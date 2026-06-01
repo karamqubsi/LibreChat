@@ -325,8 +325,6 @@ describe('MCPServerInspector', () => {
         expect.objectContaining({
           serverName: 'test_server',
           serverConfig: expect.objectContaining({ type: 'stdio', command: 'node' }),
-          useSSRFProtection: true,
-          dbSourced: false,
         }),
       );
 

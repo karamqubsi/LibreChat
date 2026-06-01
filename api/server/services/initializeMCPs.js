@@ -7,12 +7,17 @@ const { createMCPServersRegistry, createMCPManager } = require('~/config');
  * Initialize MCP servers
  */
 async function initializeMCPs() {
-  const appConfig = await getAppConfig();
+  const appConfig = await getAppConfig({ baseOnly: true });
   const mcpServers = appConfig.mcpConfig;
   const enableApps = appConfig?.mcpSettings?.apps !== false;
 
   try {
-    createMCPServersRegistry(mongoose, appConfig?.mcpSettings?.allowedDomains, enableApps);
+    createMCPServersRegistry(
+      mongoose,
+      appConfig?.mcpSettings?.allowedDomains,
+      appConfig?.mcpSettings?.allowedAddresses,
+      enableApps,
+    );
   } catch (error) {
     logger.error('[MCP] Failed to initialize MCPServersRegistry:', error);
     throw error;

@@ -4,9 +4,9 @@ import type { MCPConnection } from '~/mcp/connection';
 import type * as t from '~/mcp/types';
 import { isMCPDomainAllowed, extractMCPServerDomain } from '~/auth/domain';
 import { MCPConnectionFactory } from '~/mcp/MCPConnectionFactory';
+import { hasCustomUserVars, isUserSourced } from '~/mcp/utils';
 import { MCPDomainNotAllowedError } from '~/mcp/errors';
 import { detectOAuthRequirement } from '~/mcp/oauth';
-import { hasCustomUserVars } from '~/mcp/utils';
 import { isEnabled } from '~/utils';
 
 /**
@@ -22,6 +22,7 @@ export class MCPServerInspector {
     private readonly useSSRFProtection: boolean = false,
     private readonly enableApps: boolean = true,
     private readonly allowedDomains?: string[] | null,
+    private readonly allowedAddresses?: string[] | null,
   ) {}
 
   /**
@@ -38,10 +39,11 @@ export class MCPServerInspector {
     rawConfig: t.MCPOptions,
     connection?: MCPConnection,
     allowedDomains?: string[] | null,
+    allowedAddresses?: string[] | null,
     enableApps: boolean = true,
   ): Promise<t.ParsedServerConfig> {
     // Validate domain against allowlist BEFORE attempting connection
-    const isDomainAllowed = await isMCPDomainAllowed(rawConfig, allowedDomains);
+    const isDomainAllowed = await isMCPDomainAllowed(rawConfig, allowedDomains, allowedAddresses);
     if (!isDomainAllowed) {
       const domain = extractMCPServerDomain(rawConfig);
       throw new MCPDomainNotAllowedError(domain ?? 'unknown');
@@ -56,6 +58,7 @@ export class MCPServerInspector {
       useSSRFProtection,
       enableApps,
       allowedDomains,
+      allowedAddresses,
     );
     await inspector.inspectServer();
     inspector.config.initDuration = Date.now() - start;
@@ -76,9 +79,10 @@ export class MCPServerInspector {
         this.connection = await MCPConnectionFactory.create({
           serverConfig: this.config,
           serverName: this.serverName,
-          dbSourced: !!this.config.dbId,
+          dbSourced: isUserSourced(this.config),
           useSSRFProtection: this.useSSRFProtection,
           allowedDomains: this.allowedDomains,
+          allowedAddresses: this.allowedAddresses,
           enableApps: this.enableApps,
         });
       }
@@ -106,7 +110,11 @@ export class MCPServerInspector {
       return;
     }
 
-    const result = await detectOAuthRequirement(this.config.url);
+    const result = await detectOAuthRequirement(
+      this.config.url,
+      this.allowedDomains,
+      this.allowedAddresses,
+    );
     this.config.requiresOAuth = result.requiresOAuth;
     this.config.oauthMetadata = result.metadata;
   }
