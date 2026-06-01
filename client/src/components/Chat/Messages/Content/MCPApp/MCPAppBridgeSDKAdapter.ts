@@ -8,6 +8,12 @@ const MCP_HOST_VERSION = LIBRECHAT_MCP_HOST_VERSION ?? '1.0.0';
 
 type ExtAppBridgeModule = typeof import('@modelcontextprotocol/ext-apps/app-bridge');
 
+type SdkAppBridge = import('@modelcontextprotocol/ext-apps/app-bridge').AppBridge;
+type SdkHostContext = Parameters<SdkAppBridge['setHostContext']>[0];
+type SdkCallToolResult = Awaited<ReturnType<SdkAppBridge['oncalltool']>>;
+type SdkReadResourceResult = Awaited<ReturnType<SdkAppBridge['onreadresource']>>;
+type SdkToolResultParams = Parameters<SdkAppBridge['sendToolResult']>[0];
+
 /**
  * Experimental bridge adapter around @modelcontextprotocol/ext-apps/app-bridge.
  * This is intentionally opt-in and keeps backend proxy calls unchanged.
@@ -96,19 +102,14 @@ export class MCPAppBridgeSDKAdapter {
         updateModelContext: { text: {}, structuredContent: {} },
       },
       {
-        hostContext: this.pendingHostContext ?? undefined,
+        hostContext: (this.pendingHostContext ?? undefined) as SdkHostContext | undefined,
       },
     );
 
     bridge.oncalltool = async (params) => {
       try {
         const args = (params.arguments as Record<string, unknown>) ?? {};
-        return (await callMCPAppTool(this.serverName, params.name, args)) as {
-          content?: unknown[];
-          structuredContent?: Record<string, unknown>;
-          isError?: boolean;
-          _meta?: Record<string, unknown>;
-        };
+        return (await callMCPAppTool(this.serverName, params.name, args)) as SdkCallToolResult;
       } catch (error) {
         if (this.isCancellationError(error)) {
           void bridge.sendToolCancelled({
@@ -120,15 +121,7 @@ export class MCPAppBridgeSDKAdapter {
     };
 
     bridge.onreadresource = async (params) => {
-      return (await fetchMCPResource(this.serverName, params.uri)) as {
-        contents: Array<{
-          uri: string;
-          mimeType?: string;
-          text?: string;
-          blob?: string;
-          _meta?: Record<string, unknown>;
-        }>;
-      };
+      return (await fetchMCPResource(this.serverName, params.uri)) as SdkReadResourceResult;
     };
 
     bridge.onopenlink = async (params) => {
@@ -210,7 +203,7 @@ export class MCPAppBridgeSDKAdapter {
     this.initialPayloadSent = true;
     void this.bridge.sendToolInput({ arguments: this.options.toolArguments ?? {} });
     if (this.options.toolResult) {
-      void this.bridge.sendToolResult(this.options.toolResult as Record<string, unknown>);
+      void this.bridge.sendToolResult(this.options.toolResult as SdkToolResultParams);
     }
   }
 
@@ -264,7 +257,7 @@ export class MCPAppBridgeSDKAdapter {
     }
 
     if (this.pendingHostContext) {
-      this.bridge.setHostContext(this.pendingHostContext);
+      this.bridge.setHostContext(this.pendingHostContext as SdkHostContext);
       this.pendingHostContext = null;
     }
 
