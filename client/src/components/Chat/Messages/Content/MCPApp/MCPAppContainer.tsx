@@ -140,7 +140,7 @@ export default function MCPAppContainer({
   const [revealed, setRevealed] = useState(false);
   const [displayMode, setDisplayMode] = useState<'inline' | 'fullscreen'>('inline');
   const [sandboxSrc, setSandboxSrc] = useState<string>('about:blank');
-  const [sandboxBootstrapError, setSandboxBootstrapError] = useState<string | null>(null);
+  const [sandboxBootstrapError, setSandboxBootstrapError] = useState(false);
   const displayModeRef = useRef<'inline' | 'fullscreen'>('inline');
   const sandboxReadyRef = useRef(false);
 
@@ -186,13 +186,13 @@ export default function MCPAppContainer({
         if (!active) {
           return;
         }
-        setSandboxBootstrapError(null);
+        setSandboxBootstrapError(false);
         setSandboxSrc(buildOpaqueSandboxSrc(htmlTemplate));
       } catch (error) {
         console.error('[MCPAppContainer] Failed to bootstrap opaque sandbox source:', error);
         if (active) {
           setSandboxSrc('about:blank');
-          setSandboxBootstrapError('Failed to load the secure MCP app sandbox.');
+          setSandboxBootstrapError(true);
           setDisplayMode('inline');
         }
       }
@@ -359,7 +359,7 @@ export default function MCPAppContainer({
       >
         <div className="rounded-md border border-border-medium bg-surface-primary px-4 py-3 text-sm">
           <div className="font-medium text-text-primary">{localize('com_ui_mcp_init_failed')}</div>
-          <div className="mt-1 text-text-secondary">{sandboxBootstrapError}</div>
+          <div className="mt-1 text-text-secondary">{localize('com_ui_mcp_app_sandbox_failed')}</div>
         </div>
       </div>
     );
@@ -424,7 +424,7 @@ export default function MCPAppContainer({
               <button
                 onClick={() => setDisplayMode('inline')}
                 className="rounded-md p-1 text-text-secondary hover:bg-surface-hover hover:text-text-primary"
-                aria-label="Close fullscreen"
+                aria-label={localize('com_ui_close_fullscreen')}
               >
                 <svg
                   width="20"
@@ -445,7 +445,7 @@ export default function MCPAppContainer({
           sandbox="allow-scripts allow-same-origin"
           src={sandboxSrc}
           style={iframeStyle}
-          title="MCP App"
+          title={localize('com_ui_mcp_app')}
         />
       </div>
     </div>
