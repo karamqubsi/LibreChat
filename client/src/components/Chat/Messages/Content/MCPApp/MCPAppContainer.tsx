@@ -1,9 +1,24 @@
-import React, { useEffect, useRef, useState, useCallback, useContext } from 'react';
+import React, {
+  useId,
+  useRef,
+  useState,
+  useEffect,
+  useContext,
+  useCallback,
+  useLayoutEffect,
+  useSyncExternalStore,
+} from 'react';
 import { request } from 'librechat-data-provider';
 import { ThemeContext, isDark } from '@librechat/client';
 import { createMCPAppBridge, type MCPAppBridgeLike } from './createMCPAppBridge';
 import type { McpUiResourceCsp, McpUiResourcePermissions } from './mcpAppUtils';
 import { normalizePermissions } from './mcpAppUtils';
+import {
+  claimMcpFullscreen,
+  releaseMcpFullscreen,
+  subscribeMcpFullscreen,
+  getActiveMcpFullscreen,
+} from './mcpAppFullscreen';
 import { useLocalize } from '~/hooks';
 import { MessagesViewContext } from '~/Providers/MessagesViewContext';
 
@@ -143,6 +158,13 @@ export default function MCPAppContainer({
   const [sandboxBootstrapError, setSandboxBootstrapError] = useState(false);
   const displayModeRef = useRef<'inline' | 'fullscreen'>('inline');
   const sandboxReadyRef = useRef(false);
+  const fullscreenWrapperRef = useRef<HTMLDivElement>(null);
+  const instanceId = useId();
+  const activeFullscreenId = useSyncExternalStore(
+    subscribeMcpFullscreen,
+    getActiveMcpFullscreen,
+    getActiveMcpFullscreen,
+  );
 
   const { theme: themeMode } = useContext(ThemeContext);
   const theme = isDark(themeMode) ? 'dark' : 'light';
@@ -163,6 +185,67 @@ export default function MCPAppContainer({
   useEffect(() => {
     displayModeRef.current = displayMode;
   }, [displayMode]);
+
+  // Promote the fullscreen wrapper into the browser's top layer (Popover API).
+  // A `position: fixed` overlay is otherwise confined by any ancestor that
+  // establishes a containing block — LibreChat's message rows carry a Tailwind
+  // `transform` (even an identity one), which clipped fullscreen to the message
+  // column. The top layer escapes that without re-parenting the iframe, so the
+  // live bridge and app state survive the toggle. Runs in a layout effect so the
+  // promotion happens before paint (no flash of the confined state).
+  useLayoutEffect(() => {
+    const el = fullscreenWrapperRef.current;
+    if (!el || typeof el.showPopover !== 'function') {
+      return;
+    }
+    if (displayMode === 'fullscreen') {
+      if (!el.hasAttribute('popover')) {
+        el.setAttribute('popover', 'manual');
+      }
+      if (!el.matches(':popover-open')) {
+        try {
+          el.showPopover();
+        } catch {
+          /* unsupported in this context */
+        }
+      }
+    } else {
+      if (el.matches(':popover-open')) {
+        try {
+          el.hidePopover();
+        } catch {
+          /* already closed */
+        }
+      }
+      el.removeAttribute('popover');
+    }
+  }, [displayMode]);
+
+  // Enforce a single fullscreen MCP app per window. The latest app to go
+  // fullscreen claims the slot; any other fullscreen app yields back to inline,
+  // so the user never has to dismiss a stack of overlays.
+  useEffect(() => {
+    if (displayMode === 'fullscreen') {
+      claimMcpFullscreen(instanceId);
+    } else {
+      releaseMcpFullscreen(instanceId);
+    }
+  }, [displayMode, instanceId]);
+
+  useEffect(() => () => releaseMcpFullscreen(instanceId), [instanceId]);
+
+  // React only to another app claiming the slot. Reads the current mode from a
+  // ref (not deps) so it never fires on our own enter-fullscreen render, which
+  // would otherwise read a stale owner id and yield ourselves back to inline.
+  useEffect(() => {
+    if (
+      activeFullscreenId !== null &&
+      activeFullscreenId !== instanceId &&
+      displayModeRef.current === 'fullscreen'
+    ) {
+      setDisplayMode('inline');
+    }
+  }, [activeFullscreenId, instanceId]);
 
   const handleSandboxReady = useCallback(() => {
     if (!bridgeRef.current || sandboxReadyRef.current) {
@@ -369,18 +452,25 @@ export default function MCPAppContainer({
 
   // Inline: the iframe renders in normal document flow inside a height-reserving
   // placeholder, so surrounding message content lays out around it naturally.
-  // Fullscreen: the same iframe node's wrapper is promoted to a fixed overlay via
-  // CSS only (no portal, no remount), preserving the live bridge and app state.
-  // NOTE: fullscreen relies on no ancestor in the chat tree establishing a
-  // fixed-positioning containing block (transform/filter/perspective/contain) —
-  // true today. Portaling to <body> would harden it but remounts the iframe and
-  // drops app state, so we keep the same-node approach.
+  // Fullscreen: the same wrapper node is promoted to the top layer (see the
+  // layout effect above) and sized to the viewport. The top layer escapes any
+  // transformed/filtered ancestor without re-parenting the iframe, so the bridge
+  // and app state survive the toggle. margin/padding/border reset the user-agent
+  // popover defaults. On browsers without the Popover API the wrapper stays a
+  // position:fixed descendant: the high z-index keeps it above sibling content,
+  // but a transformed ancestor can still confine it (degraded, not
+  // viewport-filling). Popover API support is broad as of 2026-01.
   const wrapperStyle: React.CSSProperties = fullscreen
     ? {
         position: 'fixed',
         inset: 0,
         width: '100vw',
         height: '100vh',
+        maxWidth: 'none',
+        maxHeight: 'none',
+        margin: 0,
+        padding: 0,
+        border: 'none',
         zIndex: 2147483647,
         background: 'var(--surface-primary)',
         display: 'flex',
@@ -403,15 +493,17 @@ export default function MCPAppContainer({
       style={{
         maxWidth: '100%',
         overflow: 'hidden',
-        // Keep opaque in fullscreen: the fixed overlay is a descendant here, and
-        // CSS opacity on this placeholder would dim it. Inline still fades in once
-        // the app reports a size (revealed).
+        // Keep opaque in fullscreen for the no-Popover fallback path, where the
+        // overlay is still a position:fixed descendant that this placeholder's
+        // opacity would dim. (With the Popover API the overlay lives in the top
+        // layer, immune to ancestor opacity, so the guard is a no-op there.)
+        // Inline still fades in once the app reports a size (revealed).
         opacity: fullscreen || revealed ? 1 : 0,
         height: inlineIframeHeight,
         transition: 'opacity 0.3s ease-out, height 0.35s cubic-bezier(0.16, 1, 0.3, 1)',
       }}
     >
-      <div style={wrapperStyle}>
+      <div ref={fullscreenWrapperRef} style={wrapperStyle}>
         <div
           className="items-center justify-between border-b border-border-medium px-4 py-2"
           style={{ display: fullscreen ? 'flex' : 'none' }}

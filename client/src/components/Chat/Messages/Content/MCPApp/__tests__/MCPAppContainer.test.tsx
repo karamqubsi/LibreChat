@@ -377,4 +377,81 @@ describe('MCPAppContainer fullscreen lifecycle', () => {
     });
     expect(setMcpAppModelContext).toHaveBeenCalledWith(null);
   });
+
+  it('promotes the fullscreen wrapper into the top layer via the Popover API', async () => {
+    // jsdom has no Popover API; polyfill it so the top-layer promotion path runs.
+    const openEls = new WeakSet<Element>();
+    const origMatches = Element.prototype.matches;
+    const showPopover = jest.fn(function (this: Element) {
+      openEls.add(this);
+    });
+    const hidePopover = jest.fn(function (this: Element) {
+      openEls.delete(this);
+    });
+    (Element.prototype as unknown as { showPopover: () => void }).showPopover = showPopover;
+    (Element.prototype as unknown as { hidePopover: () => void }).hidePopover = hidePopover;
+    Element.prototype.matches = function (selector: string) {
+      if (selector === ':popover-open') {
+        return openEls.has(this);
+      }
+      return origMatches.call(this, selector);
+    };
+
+    try {
+      const { container } = renderWithContext(
+        <MCPAppContainer html="<html><body>app</body></html>" resourceMeta={null} serverName="a" />,
+      );
+
+      act(() => {
+        bridgeInstances[0].options.onDisplayModeRequest('fullscreen');
+      });
+      await waitFor(() => {
+        expect(screen.getByLabelText('Close fullscreen')).toBeInTheDocument();
+      });
+
+      const promoted = container.querySelector('[popover="manual"]');
+      expect(promoted).toBeTruthy();
+      expect(showPopover).toHaveBeenCalled();
+
+      fireEvent.click(screen.getByLabelText('Close fullscreen'));
+      await waitFor(() => {
+        expect(screen.queryByLabelText('Close fullscreen')).not.toBeInTheDocument();
+      });
+      expect(hidePopover).toHaveBeenCalled();
+      expect(container.querySelector('[popover="manual"]')).toBeNull();
+    } finally {
+      Element.prototype.matches = origMatches;
+      delete (Element.prototype as unknown as { showPopover?: () => void }).showPopover;
+      delete (Element.prototype as unknown as { hidePopover?: () => void }).hidePopover;
+    }
+  });
+
+  it('keeps only one MCP app fullscreen at a time across the window', async () => {
+    renderWithContext(
+      <>
+        <MCPAppContainer html="<html><body>a</body></html>" resourceMeta={null} serverName="a" />
+        <MCPAppContainer html="<html><body>b</body></html>" resourceMeta={null} serverName="b" />
+      </>,
+    );
+    expect(bridgeInstances).toHaveLength(2);
+
+    act(() => {
+      bridgeInstances[0].options.onDisplayModeRequest('fullscreen');
+    });
+    await waitFor(() => {
+      expect(screen.getAllByLabelText('Close fullscreen')).toHaveLength(1);
+    });
+
+    // Second app claims fullscreen: the first must yield back to inline, so there
+    // is still exactly one overlay (not a stack of two).
+    act(() => {
+      bridgeInstances[1].options.onDisplayModeRequest('fullscreen');
+    });
+    await waitFor(() => {
+      expect(screen.getAllByLabelText('Close fullscreen')).toHaveLength(1);
+    });
+
+    // The yielded app is told it is back inline (so its UI re-lays-out).
+    expect(bridgeInstances[0].sendContextUpdate).toHaveBeenCalledWith('light', 'inline');
+  });
 });
