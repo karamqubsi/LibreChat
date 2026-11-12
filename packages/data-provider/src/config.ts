@@ -3637,6 +3637,8 @@ export type TMCPAppsPolicy = {
   operationLimits?: TMCPAppOperationLimits;
   /** Deployment-owned dedicated Sandbox Proxy URL published to authenticated clients. */
   sandboxUrl?: string;
+  /** Deployment-owned MCP server names whose Apps auto-open and skip per-action consent. */
+  trustedServers?: string[];
 };
 
 /** Aggregate App-bearing message target; cannot exceed the safe storage ceiling. */
@@ -3668,6 +3670,7 @@ export function resolveMCPAppsPolicy(
   maxActiveViews = DEFAULT_MCP_APP_MAX_ACTIVE_VIEWS,
   maxActionPreviewChars = DEFAULT_MCP_APP_ACTION_PREVIEW_CHARS,
   operationLimits?: Partial<TMCPAppOperationLimits>,
+  trustedServers?: string[],
 ): TMCPAppsPolicy {
   return {
     enabled: value === true,
@@ -3681,6 +3684,7 @@ export function resolveMCPAppsPolicy(
       ? { operationLimits: resolveMCPAppOperationLimits(operationLimits) }
       : {}),
     ...(sandboxUrl !== undefined ? { sandboxUrl } : {}),
+    ...(trustedServers != null && trustedServers.length > 0 ? { trustedServers } : {}),
   };
 }
 
@@ -4611,6 +4615,9 @@ export const configSchema = z.object({
             .default(DEFAULT_MCP_APP_OPERATION_LIMITS.maxActive),
         })
         .prefault({}),
+      /** MCP server names whose App views open without a click and whose App-requested tool
+       * calls and chat messages run without the per-action consent dialog. */
+      trustedServers: z.array(z.string().trim().min(1)).max(64).optional(),
     })
     .prefault({}),
   mcpSettings: z

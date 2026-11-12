@@ -8,8 +8,9 @@ import React, {
   useState,
 } from 'react';
 import { Button } from '@librechat/client';
-import type { TAttachment, UIResource } from 'librechat-data-provider';
+import type { TAttachment, TMCPAppsPolicy, UIResource } from 'librechat-data-provider';
 import type { MCPAppResourceOccurrence } from '~/utils/mcpApps';
+import type { MCPAppAction } from '~/hooks/MCP/approval';
 import { useMCPAppsHost, useMCPAppViewAtCapacity } from '~/Providers/MCPAppsPolicyContext';
 import { selectToolCallUIResources, getInlineResourceHtml } from '~/utils/mcpApps';
 import { useIsMessagesViewReadOnly } from '~/Providers/MessagesViewContext';
@@ -19,6 +20,15 @@ import { MCPAppFrame } from './MCPAppFrame';
 import { useLocalize } from '~/hooks';
 
 const DEFAULT_APP_VIEW_HEIGHT = 320;
+
+/** Deployment-trusted servers open their Apps unprompted and skip per-action consent. */
+const isTrustedAppServer = (policy: Readonly<TMCPAppsPolicy>, serverName?: string): boolean =>
+  serverName != null && (policy.trustedServers?.includes(serverName) ?? false);
+
+const approveTrustedAction = async (
+  _action: MCPAppAction,
+  signal: AbortSignal,
+): Promise<boolean> => !signal.aborted;
 
 function CapacityNotice() {
   const localize = useLocalize();
@@ -63,7 +73,9 @@ function ActiveMCPAppView({
     toolArgs: frame.toolArgs,
     toolResult: frame.toolResult,
     userId,
-    onRequestAction: approval.request,
+    onRequestAction: isTrustedAppServer(policy, app.serverName)
+      ? approveTrustedAction
+      : approval.request,
     onCancelAction: approval.cancel,
     attempt: frame.attempt,
     active: frame.active,
@@ -141,11 +153,18 @@ const MCPAppView = React.memo(function MCPAppView({
   ordinal: number;
 }) {
   const localize = useLocalize();
-  const { reserveView, releaseView } = useMCPAppsHost();
+  const { reserveView, releaseView, policy } = useMCPAppsHost();
   const readOnly = useIsMessagesViewReadOnly();
   const unavailable = readOnly && !getInlineResourceHtml(app);
+  const trusted = isTrustedAppServer(policy, app.serverName);
   const viewKey = useId();
   const [opened, setOpened] = useState(false);
+  const autoOpenAttempted = useRef(false);
+  useEffect(() => {
+    if (!trusted || unavailable || autoOpenAttempted.current) return;
+    autoOpenAttempted.current = true;
+    if (reserveView(viewKey)) setOpened(true);
+  }, [trusted, unavailable, reserveView, viewKey]);
   const [atCapacity, setAtCapacity] = useState(false);
   const openButtonRef = useRef<HTMLButtonElement>(null);
   const closeButtonRef = useRef<HTMLButtonElement>(null);
